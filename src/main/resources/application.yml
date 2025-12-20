@@ -1,0 +1,64 @@
+app:
+  name: pfmg-function
+  version: 1.0.0
+  environment: dev
+
+spring:
+  application:
+    name: ${app.name}
+  cloud:
+    azure:
+      credential:
+        managed-identity-enabled: true
+      keyvault:
+        secret:
+          property-sources:
+            - name: pfmg-keyvault
+              endpoint: ${KEY_VAULT_URL}
+              refresh-interval: 1800000
+      storage:
+        blob:
+          container-name: ${image-container-name}
+          account-name: ${image-storage-account-name}
+          endpoint: ${image-storage-url}
+          max-file-size: 10485760
+
+  datasource:
+    url: jdbc:sqlserver://${sql-server-fqdn};database=${sql-database-name};encrypt=true;trustServerCertificate=true;loginTimeout=30;connectRetryCount=3;connectRetryInterval=10;applicationName=PFMGFunction
+    username: ${sql-admin-user}
+    password: ${sql-admin-pass}
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    hikari:
+      maximum-pool-size: 10
+      max-lifetime: 300000
+      idle-timeout: 60000
+      connection-timeout: 30000
+      minimum-idle: 1
+      pool-name: PFMGHikariPool
+      connection-test-query: SELECT 1
+      initialization-fail-timeout: 60000
+      leak-detection-threshold: 60000
+      register-mbeans: true
+      data-source-properties:
+        socketTimeout: 30000
+        queryTimeout: 30
+
+integrations:
+  supabase:
+    client_url: ${supabase-clientapp-url}
+    client_key: ${supabase-clientapp-key}
+    client_jwt_secret: ${supabase-clientapp-jwt-secret}
+    admin_url: ${supabase-adminapp-url}
+    admin_key: ${supabase-adminapp-key}
+    admin_jwt_secret: ${supabase-adminapp-jwt-secret}
+
+logging:
+  level:
+    root: INFO
+    com.fsapps: INFO
+    com.azure: INFO
+    com.azure.spring.cloud: INFO
+    com.zaxxer.hikari: INFO
+    org.springframework.cloud.function: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

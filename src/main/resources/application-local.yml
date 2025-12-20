@@ -1,0 +1,29 @@
+app:
+  environment: local
+
+spring:
+  cloud:
+    azure:
+      credential:
+        managed-identity-enabled: false
+      keyvault:
+        secret:
+          property-sources:
+            - name: pfmg-keyvault
+              endpoint: ${KEY_VAULT_URL}
+              refresh-interval: 1800000 # 30 minutes
+  
+  # Local development with smaller pool
+  datasource:
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
+      leak-detection-threshold: 30000 # 30 seconds - more aggressive in local
+
+# Keep logging reasonable in local development
+logging:
+  level:
+    com.fsapps: DEBUG
+    com.azure.spring.cloud: DEBUG  # Enable to see Key Vault connection details
+    com.azure.security.keyvault: DEBUG
+    com.azure.identity: DEBUG

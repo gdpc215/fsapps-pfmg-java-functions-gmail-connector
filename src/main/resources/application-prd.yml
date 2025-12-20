@@ -1,0 +1,27 @@
+app:
+  environment: prd
+
+spring:
+  # Production with larger connection pool
+  datasource:
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 4
+      leak-detection-threshold: 120000 # 2 minutes in production
+
+logging:
+  level:
+    root: WARN
+    com.eatsy.monolith: INFO
+    com.azure: WARN
+    com.zaxxer.hikari: INFO
+
+# Production metrics
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: never

@@ -1,0 +1,9 @@
+app:
+  environment: dev
+
+spring:
+  # Dev-specific connection pool size
+  datasource:
+    hikari:
+      maximum-pool-size: 15
+      minimum-idle: 1

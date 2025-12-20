@@ -1,0 +1,11 @@
+DROP FUNCTION IF EXISTS fn_getCurrentDate;
+GO
+
+CREATE FUNCTION fn_getCurrentDate()
+RETURNS DATETIME
+AS
+BEGIN
+  DECLARE @timecorrection INT = -5;
+  RETURN DATEADD(HOUR, @timecorrection, SYSUTCDATETIME());
+END;
+GO
