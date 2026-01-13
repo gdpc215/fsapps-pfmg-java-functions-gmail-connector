@@ -2,8 +2,11 @@
  * Parse transaction from email content
  */
 function parseTransaction(subject, plainBody, htmlBody, emailDate) {
+  // Create cleaned version for pattern matching
+  const cleanedForMatching = cleanForMatching(plainBody);
+  
   // Validate name contains "Genaro" before trying any parser
-  const nameMatch = plainBody.match(/Hola\s+([^,]+),/);
+  const nameMatch = cleanedForMatching.match(/Hola\s+([^,]+),/);
   if (!nameMatch || !nameMatch[1].includes('Genaro')) {
     Logger.log('Skipping email: name does not contain "Genaro"');
     return null;
@@ -11,19 +14,21 @@ function parseTransaction(subject, plainBody, htmlBody, emailDate) {
   
   // Try different parsers based on transaction type
   const parsers = [
-    parsePagoTarjeta,      // Credit card payment (income)
-    parsePagoAutomatico,   // Automatic bill payment
-    parseRetiro,           // Withdrawal from ATM/agent
-    parseConsumo,          // Credit/debit card consumption
-    parseYapeo,            // Mobile payment (Yape)
-    parseTransferencia,    // Transfer
-    parseGenericMovement   // Fallback parser
+    parsePagoTarjeta,
+    parsePagoAutomatico,
+    parseRetiro,
+    parseConsumo,
+    parseYapeo,
+    parseTransferencia,
+    parseGenericMovement
   ];
   
   for (const parser of parsers) {
     try {
-      const transaction = parser(subject, plainBody, emailDate);
+      // Pass both original and cleaned versions
+      const transaction = parser(subject, plainBody, cleanedForMatching, emailDate);
       if (transaction) {
+        Logger.log(transaction);
         return transaction;
       }
     } catch (error) {
@@ -36,34 +41,31 @@ function parseTransaction(subject, plainBody, htmlBody, emailDate) {
 
 /**
  * Parse "Pago de Tarjeta de Crédito Propia" (Credit card payment)
- * This is INCOME since you're paying your credit card
- * Example: "Realizaste un pago a tu tarjeta de S/ 7110.42 desde tu Cuenta sueldo"
  */
-function parsePagoTarjeta(subject, body, emailDate) {
-  if (!body.toLowerCase().includes('pago a tu tarjeta') && !subject.toLowerCase().includes('pago de tarjeta')) {
+function parsePagoTarjeta(subject, body, cleanBody, emailDate) {
+  if (!cleanBody.toLowerCase().includes('pago a tu tarjeta') && !subject.toLowerCase().includes('pago de tarjeta')) {
     return null;
   }
   
   const movement = createBaseMovement();
   movement.type = MovementType.INCOME;
   
-  // Extract payee info
-  const pagadoMatch = body.match(/Pagado a\s+([^\n]+)/);
+  // Use original body for extraction to preserve exact text
+  const pagadoMatch = body.match(/Pagado\s+a\s+([^\n\r]+)/);
   if (pagadoMatch) {
-    movement.payee = pagadoMatch[1].trim();
+    movement.payee = cleanExtractedText(pagadoMatch[1]);
   } else {
     movement.payee = 'Pago de tarjeta de crédito propia';
   }
   
-  // Extract amount and currency
-  const amountMatch = body.match(/pago.*de\s+(S\/|USD)\s*([\d,]+\.\d{2})/i);
+  // Use cleanBody for amount matching
+  const amountMatch = cleanBody.match(/pago.*de\s+(S\/|USD)\s*([\d,]+\.\d{2})/i);
   if (amountMatch) {
-    movement.currency = amountMatch[1] === 'S/' ? 'PEN' : 'USD';
-    movement.amount = Math.abs(parseFloat(amountMatch[2].replace(',', '')));
+    movement.currency = amountMatch[1].trim() === 'S/' ? 'PEN' : 'USD';
+    movement.amount = Math.abs(parseFloat(amountMatch[2].replace(/,/g, '')));
   }
   
-  // Extract common fields
-  const common = extractCommonFields(body, emailDate);
+  const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
   movement.operationNumber = common.operationNumber;
   if (common.currency) movement.currency = common.currency;
@@ -73,34 +75,30 @@ function parsePagoTarjeta(subject, body, emailDate) {
 
 /**
  * Parse "Pago Automático" (Automatic payment)
- * Example: "El Pago Automático de tu servicio favorito se realizó con éxito"
  */
-function parsePagoAutomatico(subject, body, emailDate) {
-  if (!body.toLowerCase().includes('pago automático') && !subject.toLowerCase().includes('pago automático')) {
+function parsePagoAutomatico(subject, body, cleanBody, emailDate) {
+  if (!cleanBody.toLowerCase().includes('pago automático') && !subject.toLowerCase().includes('pago automático')) {
     return null;
   }
   
   const movement = createBaseMovement();
   movement.type = MovementType.EXPENSE;
   
-  // Extract service/company name
-  const empresaMatch = body.match(/Empresa\s+([^\n]+)/);
+  const empresaMatch = body.match(/Empresa\s+([^\n\r]+)/);
   if (empresaMatch) {
-    movement.payee = empresaMatch[1].trim();
+    movement.payee = cleanExtractedText(empresaMatch[1]);
   } else {
-    const servicioMatch = body.match(/servicio\s+([^\n]+)/i);
-    movement.payee = servicioMatch ? servicioMatch[1].trim() : 'Pago automático';
+    const servicioMatch = body.match(/servicio\s+([^\n\r]+)/i);
+    movement.payee = servicioMatch ? cleanExtractedText(servicioMatch[1]) : 'Pago automático';
   }
   
-  // Extract amount and currency
-  const amountMatch = body.match(/Total\s+transferido\s+(S\/|USD)\s*([\d,]+\.\d{2})/i);
+  const amountMatch = cleanBody.match(/Total\s+transferido\s+(S\/|USD)\s*([\d,]+\.\d{2})/i);
   if (amountMatch) {
-    movement.currency = amountMatch[1] === 'S/' ? 'PEN' : 'USD';
-    movement.amount = -Math.abs(parseFloat(amountMatch[2].replace(',', '')));
+    movement.currency = amountMatch[1].trim() === 'S/' ? 'PEN' : 'USD';
+    movement.amount = -Math.abs(parseFloat(amountMatch[2].replace(/,/g, '')));
   }
   
-  // Extract common fields
-  const common = extractCommonFields(body, emailDate);
+  const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
   movement.operationNumber = common.operationNumber;
   if (common.currency) movement.currency = common.currency;
@@ -110,30 +108,25 @@ function parsePagoAutomatico(subject, body, emailDate) {
 
 /**
  * Parse "Retiro" (Withdrawal) transactions
- * Covers: ATM withdrawals, Agent withdrawals
- * Example: "Realizaste un retiro de S/ 450.00 con tu Tarjeta de Débito BCP"
  */
-function parseRetiro(subject, body, emailDate) {
-  if (!body.includes('retiro') && !subject.toLowerCase().includes('retiro')) {
+function parseRetiro(subject, body, cleanBody, emailDate) {
+  if (!cleanBody.includes('retiro') && !subject.toLowerCase().includes('retiro')) {
     return null;
   }
   
   const movement = createBaseMovement();
   movement.type = MovementType.EXPENSE;
   
-  // Extract location/channel info
-  const canalMatch = body.match(/(?:en un |en un )(Agente BCP|cajero automático BCP)/i);
+  const canalMatch = cleanBody.match(/(?:en un |en un )(Agente BCP|cajero automático BCP)/i);
   movement.payee = canalMatch ? `Retiro - ${canalMatch[1]}` : 'Retiro';
   
-  // Extract amount and currency
-  const amountMatch = body.match(/retiro de\s+(S\/|USD)\s*([\d,]+\.\d{2})/i);
+  const amountMatch = cleanBody.match(/retiro\s+de\s+(S\/|USD)\s*([\d,]+\.\d{2})/i);
   if (amountMatch) {
-    movement.currency = amountMatch[1] === 'S/' ? 'PEN' : 'USD';
-    movement.amount = -Math.abs(parseFloat(amountMatch[2].replace(',', '')));
+    movement.currency = amountMatch[1].trim() === 'S/' ? 'PEN' : 'USD';
+    movement.amount = -Math.abs(parseFloat(amountMatch[2].replace(/,/g, '')));
   }
   
-  // Extract common fields
-  const common = extractCommonFields(body, emailDate);
+  const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
   movement.operationNumber = common.operationNumber;
   if (common.currency) movement.currency = common.currency;
@@ -143,35 +136,42 @@ function parseRetiro(subject, body, emailDate) {
 
 /**
  * Parse "Consumo" (Card consumption) transactions
- * Covers: Credit card, Debit card purchases
- * Example: "Realizaste un consumo de S/ 60.00 con tu Tarjeta de Crédito BCP en QEMA MANCORA BAR"
  */
-function parseConsumo(subject, body, emailDate) {
-  if (!body.includes('consumo') && !subject.toLowerCase().includes('consumo')) {
+function parseConsumo(subject, body, cleanBody, emailDate) {
+  if (!cleanBody.includes('consumo') && !subject.toLowerCase().includes('consumo')) {
     return null;
   }
   
   const movement = createBaseMovement();
   movement.type = MovementType.EXPENSE;
   
-  // Extract merchant/company name
-  const empresaMatch = body.match(/Empresa\s+([^\n]+)/);
+  // Extract from original body to preserve asterisks in merchant name
+  const empresaMatch = body.match(/Empresa\s+([^\n\r]+)/);
   if (empresaMatch) {
-    movement.payee = empresaMatch[1].trim();
+    movement.payee = cleanExtractedText(empresaMatch[1]);
   } else {
     const merchantMatch = body.match(/en\s+([^\.]+)\./);
-    movement.payee = merchantMatch ? merchantMatch[1].trim() : 'Consumo';
+    movement.payee = merchantMatch ? cleanExtractedText(merchantMatch[1]) : 'Consumo';
   }
   
-  // Extract amount and currency
-  const amountMatch = body.match(/consumo de\s+(S\/|USD)\s*([\d,]+\.\d{2})/i);
-  if (amountMatch) {
-    movement.currency = amountMatch[1] === 'S/' ? 'PEN' : 'USD';
-    movement.amount = -Math.abs(parseFloat(amountMatch[2].replace(',', '')));
+  // Try multiple patterns for amount extraction
+  // Pattern 1: "consumo de S/ 60.00" or "consumo de USD 60.00"
+  let amountMatch = cleanBody.match(/consumo\s+de\s+(S\/|USD)\s*([\d,]+\.\d{2})/i);
+  
+  // Pattern 2: "consumo de $ 15.25" (dollar sign format)
+  if (!amountMatch) {
+    amountMatch = cleanBody.match(/consumo\s+de\s+\$\s*([\d,]+\.\d{2})/i);
+    if (amountMatch) {
+      // $ symbol = USD
+      movement.currency = 'USD';
+      movement.amount = -Math.abs(parseFloat(amountMatch[1].replace(/,/g, '')));
+    }
+  } else {
+    movement.currency = amountMatch[1].trim() === 'S/' ? 'PEN' : 'USD';
+    movement.amount = -Math.abs(parseFloat(amountMatch[2].replace(/,/g, '')));
   }
   
-  // Extract common fields
-  const common = extractCommonFields(body, emailDate);
+  const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
   movement.operationNumber = common.operationNumber;
   if (common.currency) movement.currency = common.currency;
@@ -181,33 +181,29 @@ function parseConsumo(subject, body, emailDate) {
 
 /**
  * Parse "Yapeo" (Mobile payment) transactions
- * Example: "Realizaste un yapeo a celular de S/ 250.00 desde tu Clasica Soles"
  */
-function parseYapeo(subject, body, emailDate) {
-  if (!body.toLowerCase().includes('yapeo') && !subject.toLowerCase().includes('yapeo')) {
+function parseYapeo(subject, body, cleanBody, emailDate) {
+  if (!cleanBody.toLowerCase().includes('yapeo') && !subject.toLowerCase().includes('yapeo')) {
     return null;
   }
   
   const movement = createBaseMovement();
   movement.type = MovementType.TRANSFER;
   
-  // Extract recipient
-  const recipientMatch = body.match(/Enviado a\s+([^\n]+)/);
+  const recipientMatch = body.match(/Enviado\s+a\s+([^\n\r]+)/);
   if (recipientMatch) {
-    movement.payee = recipientMatch[1].trim().split('\n')[0].trim();
+    movement.payee = cleanExtractedText(recipientMatch[1].split('\n')[0]);
   } else {
     movement.payee = 'Yapeo a celular';
   }
   
-  // Extract amount and currency
-  const amountMatch = body.match(/yapeo.*de\s+(S\/|USD)\s*([\d,]+\.\d{2})/i);
+  const amountMatch = cleanBody.match(/yapeo.*de\s+(S\/|USD)\s*([\d,]+\.\d{2})/i);
   if (amountMatch) {
-    movement.currency = amountMatch[1] === 'S/' ? 'PEN' : 'USD';
-    movement.amount = -Math.abs(parseFloat(amountMatch[2].replace(',', '')));
+    movement.currency = amountMatch[1].trim() === 'S/' ? 'PEN' : 'USD';
+    movement.amount = -Math.abs(parseFloat(amountMatch[2].replace(/,/g, '')));
   }
   
-  // Extract common fields
-  const common = extractCommonFields(body, emailDate);
+  const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
   movement.operationNumber = common.operationNumber;
   if (common.currency) movement.currency = common.currency;
@@ -217,33 +213,40 @@ function parseYapeo(subject, body, emailDate) {
 
 /**
  * Parse "Transferencia" (Transfer) transactions
- * Example: "Realizaste una transferencia de S/ 1.01 desde tu Clasica"
  */
-function parseTransferencia(subject, body, emailDate) {
-  if (!body.toLowerCase().includes('transferencia') && !subject.toLowerCase().includes('transferencia')) {
+function parseTransferencia(subject, body, cleanBody, emailDate) {
+  if (!cleanBody.toLowerCase().includes('transferencia') && !subject.toLowerCase().includes('transferencia')) {
     return null;
   }
   
   const movement = createBaseMovement();
   movement.type = MovementType.TRANSFER;
   
-  // Extract recipient
-  const recipientMatch = body.match(/Enviado a\s+([^\n]+)/);
+  const recipientMatch = body.match(/Enviado\s+a\s+([^\n\r]+)/);
   if (recipientMatch) {
-    movement.payee = recipientMatch[1].trim().split('\n')[0].trim();
+    movement.payee = cleanExtractedText(recipientMatch[1].split('\n')[0]);
   } else {
     movement.payee = 'Transferencia a terceros BCP';
   }
   
-  // Extract amount and currency
-  const amountMatch = body.match(/transferencia de\s+(S\/|USD)\s*([\d,]+\.\d{2})/i);
-  if (amountMatch) {
-    movement.currency = amountMatch[1] === 'S/' ? 'PEN' : 'USD';
-    movement.amount = -Math.abs(parseFloat(amountMatch[2].replace(',', '')));
+  // Try multiple patterns for amount extraction
+  // Pattern 1: "transferencia de S/ 1.01" or "transferencia de USD 1.01"
+  let amountMatch = cleanBody.match(/transferencia\s+de\s+(S\/|USD)\s*([\d,]+\.\d{2})/i);
+  
+  // Pattern 2: "Monto transferido $ 652.00" (dollar sign format)
+  if (!amountMatch) {
+    amountMatch = cleanBody.match(/(?:Monto\s+transferido|transferencia)\s+\$\s*([\d,]+\.\d{2})/i);
+    if (amountMatch) {
+      // $ symbol = USD
+      movement.currency = 'USD';
+      movement.amount = -Math.abs(parseFloat(amountMatch[1].replace(/,/g, '')));
+    }
+  } else {
+    movement.currency = amountMatch[1].trim() === 'S/' ? 'PEN' : 'USD';
+    movement.amount = -Math.abs(parseFloat(amountMatch[2].replace(/,/g, '')));
   }
   
-  // Extract common fields
-  const common = extractCommonFields(body, emailDate);
+  const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
   movement.operationNumber = common.operationNumber;
   if (common.currency) movement.currency = common.currency;
@@ -254,21 +257,18 @@ function parseTransferencia(subject, body, emailDate) {
 /**
  * Generic parser for other movement types
  */
-function parseGenericMovement(subject, body, emailDate) {
+function parseGenericMovement(subject, body, cleanBody, emailDate) {
   const movement = createBaseMovement();
   
-  // Use subject as description
   movement.payee = subject;
   
-  // Try to extract amount and currency
-  const amountMatch = body.match(/(S\/|USD)\s*([\d,]+\.\d{2})/i);
+  const amountMatch = cleanBody.match(/(S\/|USD)\s*([\d,]+\.\d{2})/i);
   if (amountMatch) {
-    movement.currency = amountMatch[1] === 'S/' ? 'PEN' : 'USD';
-    movement.amount = -Math.abs(parseFloat(amountMatch[2].replace(',', '')));
+    movement.currency = amountMatch[1].trim() === 'S/' ? 'PEN' : 'USD';
+    movement.amount = -Math.abs(parseFloat(amountMatch[2].replace(/,/g, '')));
   }
   
-  // Extract common fields
-  const common = extractCommonFields(body, emailDate);
+  const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
   movement.operationNumber = common.operationNumber;
   if (common.currency) movement.currency = common.currency;

@@ -23,29 +23,27 @@ function setupTrigger() {
  * Manual test function
  */
 function testParser() {
-  const testBody = `Hola Genaro Rafael,
+  const testBody = `Hola *Genaro Rafael,*
 
-Realizaste un consumo de S/ 60.00 con tu Tarjeta de Crédito BCP en QEMA MANCORA BAR.
+Realizaste un consumo de *S/ 245.05* con tu *Tarjeta de Débito BCP* en *IO*GENARO 
+RAFAEL DE POM.*
 
-Por tu seguridad, te enviamos los datos de tu operación.
-
-Monto
-
-Total del consumo                                    S/ 60.00
-
-
-Datos de la operación
-
-Operación realizada                          Consumo Tarjeta de Crédito
-
-Fecha y hora                                 29 de diciembre de 2025 - 07:25 PM
-
-Número de Tarjeta de Crédito                 ***********7385
-
-Empresa                                      QEMA MANCORA BAR
-
-Número de operación                          0000481573`;
+Por tu seguridad, te enviamos los *datos de tu operación.*
   
-  const result = parseTransaction('Test', testBody, testBody, new Date());
+
+*Monto*
+  
+Total del consumo *S/ 245.05*  
+  
+
+*Datos de la operación*
+  
+Operación realizada *Consumo Tarjeta de Débito* 
+Fecha y hora *06 de enero de 2026 - 03:29 PM* 
+Número de Tarjeta de Débito *************6865* 
+Empresa *IO*GENARO RAFAEL DE POM* 
+Número de operación *286036*`;
+  
+  const result = parseTransaction('Consumo con Tarjeta de Débito BCP', testBody, testBody, new Date());
   Logger.log(JSON.stringify(result, null, 2));
 }

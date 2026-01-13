@@ -32,7 +32,7 @@ const CONFIG = {
   AZURE_FUNCTION_URL: 'https://YOUR-FUNCTION-APP.azurewebsites.net/api/movements/ingest',
   PROCESS_LABEL: 'BCP/Processed',
   ERROR_LABEL: 'BCP/Error',
-  MAX_EMAILS_PER_RUN: 50
+  DAYS_TO_PROCESS: 1
 };
 ```
 
@@ -225,6 +225,6 @@ To add support for new BCP email formats:
 
 ### Performance Optimization
 
-- Adjust `MAX_EMAILS_PER_RUN` based on volume
+- Adjust `DAYS_TO_PROCESS` based on volume
 - Consider using batch API calls to Azure
 - Implement caching for duplicate detection
