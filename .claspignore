@@ -1,0 +1,6 @@
+# Ignore everything by default...
+**/**
+
+# ...except the Apps Script sources under rootDir (src/google-script)
+!appsscript.json
+!*.gs

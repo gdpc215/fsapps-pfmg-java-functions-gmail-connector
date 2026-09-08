@@ -1,72 +1,77 @@
 /**
- * Main function to check for new emails
- * Can be triggered by:
- * - Time-driven trigger (every 5 minutes)
- * - Manual execution
+ * Collect and parse BCP notification emails received in the window [sinceMs, untilMs].
+ * Returns a plain object ready to be serialised as the Web App JSON response.
+ *
+ * Shape:
+ * {
+ *   ok: true,
+ *   generatedAt, since, until,          // ISO-8601 in SCRIPT_TZ
+ *   count,                              // parsed movements
+ *   movements: [ {
+ *     messageId, subject, rawType,
+ *     type,                             // EXPENSE | INCOME | TRANSFER
+ *     payee, amount,                    // amount already signed (bank convention)
+ *     currency,                         // PEN | USD
+ *     operationNumber, cardLast4,
+ *     transactionDateLocal,            // 'yyyy-MM-ddTHH:mm:ss' in SCRIPT_TZ
+ *     emailDateLocal,
+ *     date                             // ISO-8601 UTC (legacy field)
+ *   } ],
+ *   unparsed: [ { messageId, subject, reason } ]
+ * }
  */
-function checkEmailTrigger() {
-  try {
-    const daysToProcess = CONFIG.DAYS_TO_PROCESS || 1;
-    
-    // Calculate the start date based on DAYS_TO_PROCESS
-    const startDate = new Date();
-    if (daysToProcess > 1) {
-      startDate.setDate(startDate.getDate() - (daysToProcess - 1));
-    }
-    const startDateStr = Utilities.formatDate(startDate, Session.getScriptTimeZone(), 'yyyy/MM/dd');
-    
-    // Build search query for emails from the calculated date range
-    const searchQuery = `from:${CONFIG.EMAIL_SENDER} after:${startDateStr}`; // is:unread
-    
-    const threads = GmailApp.search(searchQuery);
-    
-    Logger.log(`Found ${threads.length} email(s) from BCP in the last ${daysToProcess} day(s) (since ${startDateStr})`);
-    
-    processThreads(threads);
-    
-  } catch (error) {
-    Logger.log(`Error in checkEmailTrigger: ${error.message}`);
-  }
-}
+function collectMovements(sinceMs, untilMs) {
+  var movements = [];
+  var unparsed = [];
 
-/**
- * Helper function to process email threads
- */
-function processThreads(threads) {
-  threads.forEach(thread => {
-    try {
-      const message = thread.getMessages()[0];
-      const subject = message.getSubject();
-      const plainBody = message.getPlainBody();
-      const htmlBody = message.getBody();
-      
-      Logger.log(`Processing email: ${subject}`);
-      
-      // Parse the transaction from email body
-      const transaction = parseTransaction(subject, plainBody, htmlBody, message.getDate());
-      
-      if (transaction) {
-        // Send to Azure Function
-        const success = sendToAzureFunction(transaction);
-        
-        if (success) {
-          thread.markRead();
-          applyLabel(thread, CONFIG.PROCESS_LABEL);
-          Logger.log(`Successfully processed: ${subject}`);
+  // Gmail's after:/before: operators are day-granular, so widen the search by a day
+  // on each side and then filter precisely by each message's received timestamp.
+  var afterStr = Utilities.formatDate(new Date(sinceMs - 86400000), SCRIPT_TZ, 'yyyy/MM/dd');
+  var beforeStr = Utilities.formatDate(new Date(untilMs + 86400000), SCRIPT_TZ, 'yyyy/MM/dd');
+  var query = 'from:' + CONFIG.EMAIL_SENDER + ' after:' + afterStr + ' before:' + beforeStr;
+
+  var threads = GmailApp.search(query);
+  Logger.log('Gmail query "' + query + '" matched ' + threads.length + ' thread(s)');
+
+  threads.forEach(function (thread) {
+    thread.getMessages().forEach(function (message) {
+      var receivedMs = message.getDate().getTime();
+      if (receivedMs < sinceMs || receivedMs > untilMs) return;
+
+      var subject = message.getSubject();
+      var messageId = message.getId();
+
+      try {
+        var plainBody = message.getPlainBody();
+        var htmlBody = message.getBody();
+        var movement = parseTransaction(subject, plainBody, htmlBody, message.getDate());
+
+        if (movement) {
+          movement.messageId = messageId;
+          movement.subject = subject;
+          movement.emailDateLocal =
+            Utilities.formatDate(message.getDate(), SCRIPT_TZ, "yyyy-MM-dd'T'HH:mm:ss");
+          movements.push(movement);
         } else {
-          applyLabel(thread, CONFIG.ERROR_LABEL);
-          Logger.log(`Failed to send to Azure Function: ${subject}`);
+          unparsed.push({ messageId: messageId, subject: subject, reason: 'no parser matched' });
         }
-      } else {
-        Logger.log(`Could not parse transaction from: ${subject}`);
-        applyLabel(thread, CONFIG.ERROR_LABEL);
+      } catch (err) {
+        unparsed.push({
+          messageId: messageId,
+          subject: subject,
+          reason: String((err && err.message) || err)
+        });
       }
-      
-    } catch (error) {
-      Logger.log(`Error processing individual email: ${error.message}`);
-      applyLabel(thread, CONFIG.ERROR_LABEL);
-    }
+    });
   });
+
+  return {
+    ok: true,
+    generatedAt: Utilities.formatDate(new Date(), SCRIPT_TZ, "yyyy-MM-dd'T'HH:mm:ssXXX"),
+    since: Utilities.formatDate(new Date(sinceMs), SCRIPT_TZ, "yyyy-MM-dd'T'HH:mm:ssXXX"),
+    until: Utilities.formatDate(new Date(untilMs), SCRIPT_TZ, "yyyy-MM-dd'T'HH:mm:ssXXX"),
+    count: movements.length,
+    movements: movements,
+    unparsed: unparsed
+  };
 }
-
-

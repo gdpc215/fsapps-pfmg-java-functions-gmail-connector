@@ -4,14 +4,18 @@
 function parseTransaction(subject, plainBody, htmlBody, emailDate) {
   // Create cleaned version for pattern matching
   const cleanedForMatching = cleanForMatching(plainBody);
-  
-  // Validate name contains "Genaro" before trying any parser
-  const nameMatch = cleanedForMatching.match(/Hola\s+([^,]+),/);
-  if (!nameMatch || !nameMatch[1].includes('Genaro')) {
-    Logger.log('Skipping email: name does not contain "Genaro"');
-    return null;
+
+  // Optional account-holder guard. Set Script Property ACCOUNT_HOLDER to enable
+  // (e.g. "Genaro"); leave it unset to accept every sender's notification.
+  const accountHolder = PropertiesService.getScriptProperties().getProperty('ACCOUNT_HOLDER');
+  if (accountHolder) {
+    const nameMatch = cleanedForMatching.match(/Hola\s+([^,]+),/);
+    if (!nameMatch || nameMatch[1].toLowerCase().indexOf(accountHolder.toLowerCase()) === -1) {
+      Logger.log('Skipping email: recipient does not match ACCOUNT_HOLDER');
+      return null;
+    }
   }
-  
+
   // Try different parsers based on transaction type
   const parsers = [
     parsePagoTarjeta,
@@ -28,6 +32,7 @@ function parseTransaction(subject, plainBody, htmlBody, emailDate) {
       // Pass both original and cleaned versions
       const transaction = parser(subject, plainBody, cleanedForMatching, emailDate);
       if (transaction) {
+        transaction.rawType = parser.name.replace(/^parse/, '');
         Logger.log(transaction);
         return transaction;
       }
@@ -67,7 +72,9 @@ function parsePagoTarjeta(subject, body, cleanBody, emailDate) {
   
   const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
+  movement.transactionDateLocal = common.transactionDateLocal;
   movement.operationNumber = common.operationNumber;
+  movement.cardLast4 = common.cardLast4;
   if (common.currency) movement.currency = common.currency;
   
   return movement;
@@ -100,7 +107,9 @@ function parsePagoAutomatico(subject, body, cleanBody, emailDate) {
   
   const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
+  movement.transactionDateLocal = common.transactionDateLocal;
   movement.operationNumber = common.operationNumber;
+  movement.cardLast4 = common.cardLast4;
   if (common.currency) movement.currency = common.currency;
   
   return movement;
@@ -128,7 +137,9 @@ function parseRetiro(subject, body, cleanBody, emailDate) {
   
   const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
+  movement.transactionDateLocal = common.transactionDateLocal;
   movement.operationNumber = common.operationNumber;
+  movement.cardLast4 = common.cardLast4;
   if (common.currency) movement.currency = common.currency;
   
   return movement;
@@ -173,7 +184,9 @@ function parseConsumo(subject, body, cleanBody, emailDate) {
   
   const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
+  movement.transactionDateLocal = common.transactionDateLocal;
   movement.operationNumber = common.operationNumber;
+  movement.cardLast4 = common.cardLast4;
   if (common.currency) movement.currency = common.currency;
   
   return movement;
@@ -205,7 +218,9 @@ function parseYapeo(subject, body, cleanBody, emailDate) {
   
   const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
+  movement.transactionDateLocal = common.transactionDateLocal;
   movement.operationNumber = common.operationNumber;
+  movement.cardLast4 = common.cardLast4;
   if (common.currency) movement.currency = common.currency;
   
   return movement;
@@ -248,7 +263,9 @@ function parseTransferencia(subject, body, cleanBody, emailDate) {
   
   const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
+  movement.transactionDateLocal = common.transactionDateLocal;
   movement.operationNumber = common.operationNumber;
+  movement.cardLast4 = common.cardLast4;
   if (common.currency) movement.currency = common.currency;
   
   return movement;
@@ -270,7 +287,9 @@ function parseGenericMovement(subject, body, cleanBody, emailDate) {
   
   const common = extractCommonFields(cleanBody, emailDate);
   movement.date = common.date;
+  movement.transactionDateLocal = common.transactionDateLocal;
   movement.operationNumber = common.operationNumber;
+  movement.cardLast4 = common.cardLast4;
   if (common.currency) movement.currency = common.currency;
   
   return movement;

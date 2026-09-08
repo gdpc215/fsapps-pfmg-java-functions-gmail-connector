@@ -1,230 +1,147 @@
-# BCP Gmail Connector Setup Guide
+# BCP Gmail Connector — Setup Guide
 
-This guide will help you set up the Google Apps Script automation to monitor BCP bank transaction emails and send them to your Azure Function.
+This connector reads BCP bank transaction-notification emails from your Gmail and exposes
+them as JSON to the **PFMG Angular app**, which does the deduplication, categorization and
+insertion. It is a **Google Apps Script Web App** — there is no server and no database here.
 
-## Overview
-
-The system consists of two parts:
-1. **Google Apps Script** - Monitors Gmail for BCP transaction emails and extracts data
-2. **Azure Function** - Receives the extracted transaction data and processes it
-
-## Part 1: Google Apps Script Setup
-
-### Step 1: Create a new Apps Script project
-
-1. Go to [Google Apps Script](https://script.google.com/)
-2. Click **New Project**
-3. Give it a name like "BCP Transaction Monitor"
-
-### Step 2: Add the script code
-
-1. Delete the default `function myFunction()` code
-2. Copy the entire content from `src/google-automation.script`
-3. Paste it into the Code.gs file
-
-### Step 3: Configure the script
-
-Update the `CONFIG` object at the top of the script:
-
-```javascript
-const CONFIG = {
-  EMAIL_SENDER: 'notificaciones@notificacionesbcp.com.pe',
-  AZURE_FUNCTION_URL: 'https://YOUR-FUNCTION-APP.azurewebsites.net/api/movements/ingest',
-  PROCESS_LABEL: 'BCP/Processed',
-  ERROR_LABEL: 'BCP/Error',
-  DAYS_TO_PROCESS: 1
-};
+```
+BCP email  ──►  Gmail  ──►  Apps Script Web App (this repo)  ──►  PFMG Angular app
+                            GET ?since=&until=&token=            (review + import)
 ```
 
-Replace `YOUR-FUNCTION-APP` with your actual Azure Function App name.
+The Java / Azure Functions scaffolding in this repo is unused legacy and is not part of this flow.
 
-### Step 4: Authorize the script
+---
 
-1. Click the **Run** button (play icon) and select `testParser`
-2. Grant the necessary permissions:
-   - Read emails from Gmail
-   - Modify Gmail labels
-   - Connect to external services
+## Part 1 — Create the Apps Script project
 
-### Step 5: Set up the trigger
+### Option A — clasp (push from this repo)
 
-Run the `setupTrigger()` function once to create a time-based trigger:
+1. `npm i -g @google/clasp && clasp login`
+2. `clasp create --type standalone --title "PFMG BCP Connector" --rootDir src/google-script`
+   (or put an existing script id into `.clasp.json`).
+3. `clasp push`
 
-1. Select `setupTrigger` from the function dropdown
-2. Click **Run**
-3. This will create a trigger that runs every 5 minutes
+`.clasp.json` already points `rootDir` at `src/google-script`; `.claspignore` restricts the push
+to `appsscript.json` + `*.gs`.
 
-Alternatively, you can set up the trigger manually:
-1. Click the **Triggers** icon (clock) in the left sidebar
-2. Click **Add Trigger**
-3. Configure:
-   - Choose function: `checkEmailTrigger`
-   - Event source: **Time-driven**
-   - Type of time-based trigger: **Minutes timer**
-   - Minute interval: **Every 5 minutes**
-4. Click **Save**
+### Option B — copy/paste
 
-### Step 6: Test the script
+1. Go to <https://script.google.com/> → **New project**.
+2. Create one script file per `.gs` in `src/google-script/` and paste the contents:
+   `webapp.gs`, `trigger.gs`, `parsers.gs`, `utilities.gs`, `manualRun.gs`.
+3. **Project Settings → Show "appsscript.json"** → paste `src/google-script/appsscript.json`
+   (sets the timezone to `America/Lima` and the Gmail read-only scope).
 
-1. Send yourself a test BCP notification email (or use existing ones)
-2. Mark some BCP emails as unread
-3. Run `checkEmailTrigger` manually
-4. Check the **Execution log** (Ctrl+Enter) to see the results
+---
 
-## Part 2: Azure Function Setup
+## Part 2 — Configure
 
-### Transaction Types Supported
+**Project Settings → Script Properties** — add:
 
-The script currently parses these transaction types:
+| Property | Required | Purpose |
+|---|---|---|
+| `API_TOKEN` | yes | Shared secret. Every request must pass `?token=<this value>`. Use a long random string. |
+| `ACCOUNT_HOLDER` | no | If set (e.g. `Genaro`), only emails greeting that name (`Hola <name>,`) are parsed. Leave unset to accept all. |
 
-1. **Retiro** (Withdrawal) - ATM or agent withdrawals
-2. **Consumo** (Card Consumption) - Credit/debit card purchases
-3. **Yapeo** (Yape Payment) - Mobile payments via BCP's Yape service
-4. **Transferencia** (Transfer) - Bank transfers to third parties
+The BCP sender address is in `CONFIG.EMAIL_SENDER` in `utilities.gs`
+(`notificaciones@notificacionesbcp.com.pe`) — change it there if yours differs.
 
-### Data Structure Sent to Azure
+---
 
-The script sends a JSON object matching your `Movement` TypeScript interface:
+## Part 3 — Authorize & test before deploying
 
-```json
+1. In the editor, run **`testParser`** → grant the Gmail read permission when prompted →
+   check the Execution log shows a parsed movement (with `cardLast4`, `transactionDateLocal`).
+2. Run **`testWebApp`** → it calls `handleRequest` for the last 3 days and logs the JSON response.
+
+---
+
+## Part 4 — Deploy as a Web App
+
+1. **Deploy → New deployment → Web app**.
+2. **Execute as:** Me. **Who has access:** Anyone.
+3. Copy the deployment URL: `https://script.google.com/macros/s/XXXX/exec`.
+4. Smoke test:
+   ```
+   curl "https://script.google.com/macros/s/XXXX/exec?since=2026-09-01T00:00:00-05:00&token=YOUR_API_TOKEN"
+   ```
+   Re-deploy (**Manage deployments → Edit → New version**) after every `clasp push` / code edit.
+
+---
+
+## Part 5 — Wire it into the PFMG app
+
+In the PFMG Angular app → **Settings → Gmail Sync**:
+
+- **Web App URL** = the `/exec` URL from Part 4.
+- **Token** = the `API_TOKEN` value.
+- **Card mapping** = one row per card: its **last 4 digits** → the credit card / debit account
+  it corresponds to. Movements whose `cardLast4` isn't mapped can still be imported, but you
+  pick the account manually on the review screen.
+
+Then use **Gmail Sync** from the sidebar: pick the "since" datetime (defaults to the last
+successful sync), Fetch, review, Import.
+
+---
+
+## Request / response contract
+
+**Request** (`GET` or `POST`, query params only — do not send custom headers):
+
+| Param | Required | Format |
+|---|---|---|
+| `since` | yes | ISO-8601 datetime, e.g. `2026-09-01T00:00:00-05:00` or `2026-09-01T05:00:00Z` |
+| `until` | no | ISO-8601 datetime; defaults to now |
+| `token` | yes | must equal `API_TOKEN` |
+
+**Response** `application/json`:
+
+```jsonc
 {
-  "id": "uuid-generated",
-  "type": "EXPENSE|INCOME|TRANSFER",
-  "accountOrCardId": "CARD_1234 or ACCOUNT_5678",
-  "date": "2025-12-29T19:25:00.000Z",
-  "payee": "Merchant or recipient name",
-  "bankDescription": "Transaction description",
-  "additionalInfo": "Additional context",
-  "notes": "Channel or other notes",
-  "currency": "PEN|USD",
-  "amount": -60.00,
-  "operationNumber": "0000481573",
-  "categoryId": null,
-  "subcategoryId": null,
-  "isStub": false,
-  "labels": ["BCP", "AUTO_IMPORTED"],
-  "linkedMovementId": null,
-  "targetAccountOrCardId": null
-}
-```
-
-### Create Azure Function Endpoint
-
-You need to create an HTTP-triggered Azure Function at:
-`/api/movements/ingest`
-
-Example handler structure:
-
-```java
-@FunctionName("movementIngest")
-public HttpResponseMessage ingestMovement(
-    @HttpTrigger(
-        name = "req",
-        methods = {HttpMethod.POST},
-        authLevel = AuthorizationLevel.FUNCTION,
-        route = "movements/ingest"
-    ) HttpRequestMessage<Optional<MovementEntity>> request,
-    ExecutionContext context) {
-    
-    MovementEntity movement = request.getBody().orElse(null);
-    
-    if (movement == null) {
-        return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
-            .body("Movement data is required")
-            .build();
+  "ok": true,
+  "generatedAt": "2026-09-05T18:00:00-05:00",
+  "since": "2026-09-01T00:00:00-05:00",
+  "until": "2026-09-05T18:00:00-05:00",
+  "count": 1,
+  "movements": [
+    {
+      "messageId": "18f2ab...",
+      "subject": "Realizaste un consumo con tu Tarjeta de Crédito",
+      "rawType": "Consumo",
+      "type": "EXPENSE",                       // EXPENSE | INCOME | TRANSFER
+      "payee": "RAPPI PERU",
+      "amount": -54.90,                        // already signed (bank convention)
+      "currency": "PEN",                       // PEN | USD
+      "operationNumber": "0048371",
+      "cardLast4": "1234",
+      "transactionDateLocal": "2026-09-05T13:20:00",   // America/Lima, no offset
+      "emailDateLocal": "2026-09-05T13:22:00",
+      "date": "2026-09-05T18:20:00.000Z"       // legacy UTC field
     }
-    
-    context.getLogger().info("Received movement: " + movement.operationNumber);
-    
-    // TODO: Validate and save to database
-    // movementRepository.save(movement);
-    
-    return request.createResponseBuilder(HttpStatus.OK)
-        .body("Movement ingested successfully")
-        .build();
+  ],
+  "unparsed": [ { "messageId": "…", "subject": "…", "reason": "no parser matched" } ]
 }
 ```
 
-## Monitoring and Troubleshooting
+Error responses: `{ "ok": false, "error": "unauthorized" | "missing \"since\" parameter" | ... }`.
 
-### Check Google Apps Script Logs
+---
 
-1. Open your Apps Script project
-2. Click **Executions** (list icon) in the left sidebar
-3. View execution history and any errors
+## Supported email types
 
-### Gmail Labels
+`parsers.gs` (tried in order): `parsePagoTarjeta` (INCOME), `parsePagoAutomatico`, `parseRetiro`,
+`parseConsumo`, `parseYapeo` (TRANSFER), `parseTransferencia` (TRANSFER), `parseGenericMovement`
+(fallback). To add a type: write a `parseX(subject, body, cleanBody, emailDate)` returning a
+movement (or `null`), and add it to the `parsers` array in `parseTransaction()`.
 
-The script automatically creates and applies these labels:
-- **BCP/Processed** - Successfully processed emails
-- **BCP/Error** - Emails that failed processing
+## Notes
 
-### Common Issues
-
-**Issue: Script not running automatically**
-- Check that the trigger is properly configured
-- Verify you haven't exceeded Google's quota limits
-
-**Issue: Cannot parse transactions**
-- Check the execution log for parsing errors
-- BCP may have changed their email format
-- Update the regex patterns in the parser functions
-
-**Issue: Azure Function not receiving data**
-- Verify the AZURE_FUNCTION_URL is correct
-- Check Azure Function logs for incoming requests
-- Ensure CORS is configured if needed
-
-**Issue: Authorization errors**
-- Re-authorize the script from the Apps Script editor
-- Check that all required Gmail permissions are granted
-
-## Testing Individual Parsers
-
-Use the `testParser()` function to test parsing logic:
-
-```javascript
-function testParser() {
-  const testBody = `[paste email body here]`;
-  const result = parseTransaction('Test', testBody, testBody, new Date());
-  Logger.log(JSON.stringify(result, null, 2));
-}
-```
-
-## Security Considerations
-
-1. **Azure Function Authentication**: Consider using `AuthorizationLevel.FUNCTION` or `ANONYMOUS` with API key validation
-2. **Data Privacy**: Transaction data contains sensitive information - ensure proper encryption in transit (HTTPS)
-3. **Gmail Access**: The script has access to your Gmail - keep credentials secure
-4. **Rate Limiting**: Implement rate limiting on the Azure Function to prevent abuse
-
-## Next Steps
-
-1. Create the Azure Function endpoint `/api/movements/ingest`
-2. Create a `MovementEntity` Java class matching the TypeScript `Movement` interface
-3. Implement database persistence for received movements
-4. Add validation and duplicate detection (using `operationNumber`)
-5. Consider adding webhook notifications for successful imports
-6. Implement error handling and retry logic
-
-## Extending the Script
-
-### Adding New Transaction Types
-
-To add support for new BCP email formats:
-
-1. Create a new parser function (e.g., `parsePagoServicio`)
-2. Add it to the `parsers` array in `parseTransaction()`
-3. Test with sample email bodies
-
-### Improving Parsing Accuracy
-
-- Add more regex patterns for edge cases
-- Implement machine learning for unstructured text
-- Add validation rules for extracted data
-
-### Performance Optimization
-
-- Adjust `DAYS_TO_PROCESS` based on volume
-- Consider using batch API calls to Azure
-- Implement caching for duplicate detection
+- **Idempotency:** the Web App is read-only and stateless. Re-fetching an overlapping window is
+  safe — the PFMG app flags already-imported rows as duplicates and also remembers processed
+  `messageId`s.
+- **Timezone:** all emitted dates use `America/Lima`. `transactionDateLocal` has no offset so the
+  PFMG app can take its `YYYY-MM-DD` prefix directly. Keep `appsscript.json`'s `timeZone` and
+  `SCRIPT_TZ` in `utilities.gs` identical.
+- **Security:** the deployment URL is public; the `API_TOKEN` is the only guard. Rotate it by
+  changing the script property (no re-deploy needed).
